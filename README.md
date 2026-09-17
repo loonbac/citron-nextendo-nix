@@ -4,7 +4,24 @@ Small Nix flake for the official Linux builds of
 [`NextendoNetwork/citron-nextendo`](https://github.com/NextendoNetwork/citron-nextendo).
 It packages the upstream AppImages; it does not fork or compile the emulator.
 
-## Run
+## Install
+
+Citron Nextendo is not currently part of nixpkgs. Install it directly from
+this flake.
+
+Generic x86-64 or AArch64 package:
+
+```bash
+nix profile install github:loonbac/citron-nextendo-nix#citron-nextendo
+```
+
+For an x86-64-v3 compatible CPU:
+
+```bash
+nix profile install github:loonbac/citron-nextendo-nix#citron-nextendo-v3
+```
+
+## Run without installing
 
 Generic x86-64 or AArch64 package:
 
