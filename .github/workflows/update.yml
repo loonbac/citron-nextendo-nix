@@ -1,0 +1,274 @@
+name: Update official Citron release
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: update-official-citron-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: NextendoNetwork/citron-nextendo
+  UPSTREAM_RELEASE_TAG: nightly-linux
+
+jobs:
+  update:
+    name: Mirror verified official AppImages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out flake
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Discover successful official release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_json="$(gh api \
+            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
+          revision="$(jq -er \
+            '.body | capture("commit/(?<sha>[0-9a-f]{40})").sha' \
+            <<<"$release_json")"
+          short_revision="${revision:0:9}"
+          published_at="$(jq -er '.published_at' <<<"$release_json")"
+          immutable_tag="linux-${short_revision}"
+
+          successful_runs="$(gh api --method GET \
+            "repos/${UPSTREAM_REPOSITORY}/actions/workflows/build-linux.yml/runs" \
+            -f event=workflow_dispatch -f status=success -f per_page=100)"
+          if ! jq -e --arg revision "$revision" \
+            '.workflow_runs | any(.head_sha == $revision and .conclusion == "success")' \
+            <<<"$successful_runs" >/dev/null; then
+            echo "No successful official Linux workflow exists for $revision." >&2
+            exit 1
+          fi
+
+          select_asset() {
+            local label="$1"
+            local regex="$2"
+            jq -cer --arg label "$label" --arg regex "$regex" '
+              [
+                .assets[]
+                | select(.name | test($regex))
+                | select(.digest | type == "string" and startswith("sha256:"))
+              ]
+              | if length == 1 then .[0]
+                else error("expected exactly one verified " + $label + " AppImage")
+                end
+            ' <<<"$release_json"
+          }
+
+          generic="$(select_asset x86_64 \
+            "^citron_nightly-${short_revision}-linux-x86_64(-[A-Za-z0-9_-]+)?[.]AppImage$")"
+          v3="$(select_asset x86_64_v3 \
+            "^citron_nightly-${short_revision}-linux-x86_64_v3(-[A-Za-z0-9_-]+)?[.]AppImage$")"
+          arm="$(select_asset aarch64 \
+            "^citron_nightly-${short_revision}-linux-aarch64(-[A-Za-z0-9_-]+)?[.]AppImage$")"
+
+          generic_name="$(jq -r '.name' <<<"$generic")"
+          v3_name="$(jq -r '.name' <<<"$v3")"
+          arm_name="$(jq -r '.name' <<<"$arm")"
+          needs_mirror=true
+
+          if own_release="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${immutable_tag}" \
+            2>/dev/null)"; then
+            for name in "$generic_name" "$v3_name" "$arm_name"; do
+              upstream_digest="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .digest' \
+                <<<"$release_json")"
+              mirror_digest="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .digest' \
+                <<<"$own_release")"
+              if [[ "$mirror_digest" != "$upstream_digest" ]]; then
+                echo "Immutable mirror $immutable_tag differs for $name." >&2
+                exit 1
+              fi
+            done
+            needs_mirror=false
+          fi
+
+          {
+            echo "revision=$revision"
+            echo "short_revision=$short_revision"
+            echo "published_at=$published_at"
+            echo "immutable_tag=$immutable_tag"
+            echo "generic_name=$generic_name"
+            echo "v3_name=$v3_name"
+            echo "arm_name=$arm_name"
+            echo "needs_mirror=$needs_mirror"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Download official AppImages
+        if: steps.release.outputs.needs_mirror == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
+          V3_NAME: ${{ steps.release.outputs.v3_name }}
+          ARM_NAME: ${{ steps.release.outputs.arm_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/citron"
+          cd "$RUNNER_TEMP/citron"
+          for asset in "$GENERIC_NAME" "$V3_NAME" "$ARM_NAME"; do
+            gh release download "$UPSTREAM_RELEASE_TAG" \
+              --repo "$UPSTREAM_REPOSITORY" \
+              --pattern "$asset"
+          done
+
+      - name: Verify official SHA-256 digests
+        if: steps.release.outputs.needs_mirror == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
+          V3_NAME: ${{ steps.release.outputs.v3_name }}
+          ARM_NAME: ${{ steps.release.outputs.arm_name }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api \
+            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
+          cd "$RUNNER_TEMP/citron"
+          for name in "$GENERIC_NAME" "$V3_NAME" "$ARM_NAME"; do
+            expected="$(jq -er --arg name "$name" \
+              '.assets[] | select(.name == $name) | .digest' \
+              <<<"$release_json")"
+            actual="sha256:$(sha256sum "$name" | cut -d' ' -f1)"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "SHA-256 mismatch for $name." >&2
+              exit 1
+            fi
+          done
+          sha256sum ./*.AppImage | sort -k2 >SHA256SUMS
+
+      - name: Publish immutable byte-for-byte mirror
+        if: steps.release.outputs.needs_mirror == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.release.outputs.revision }}
+          SHORT_REVISION: ${{ steps.release.outputs.short_revision }}
+          PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          IMMUTABLE_TAG: ${{ steps.release.outputs.immutable_tag }}
+        run: |
+          set -euo pipefail
+          notes="Byte-for-byte mirror of the official Nextendo Linux AppImages published at ${PUBLISHED_AT}. No independent build was performed. Upstream commit: https://github.com/${UPSTREAM_REPOSITORY}/commit/${REVISION}"
+          gh release create "$IMMUTABLE_TAG" \
+            "$RUNNER_TEMP"/citron/*.AppImage \
+            "$RUNNER_TEMP/citron/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Citron Nextendo Linux ${SHORT_REVISION}" \
+            --notes "$notes"
+
+      - name: Generate fixed Nix metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.release.outputs.revision }}
+          PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          IMMUTABLE_TAG: ${{ steps.release.outputs.immutable_tag }}
+          GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
+          V3_NAME: ${{ steps.release.outputs.v3_name }}
+          ARM_NAME: ${{ steps.release.outputs.arm_name }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api \
+            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
+
+          asset_digest() {
+            jq -er --arg name "$1" \
+              '.assets[] | select(.name == $name) | .digest' \
+              <<<"$release_json"
+          }
+          sri_from_digest() {
+            python3 - "$1" <<'PY'
+          import base64
+          import sys
+
+          algorithm, digest = sys.argv[1].split(":", 1)
+          print(f"{algorithm}-{base64.b64encode(bytes.fromhex(digest)).decode()}")
+          PY
+          }
+          asset_url() {
+            printf 'https://github.com/%s/releases/download/%s/%s\n' \
+              "$GITHUB_REPOSITORY" "$IMMUTABLE_TAG" "$1"
+          }
+
+          icon_url="https://raw.githubusercontent.com/${UPSTREAM_REPOSITORY}/${REVISION}/dist/citron.svg"
+          rules_url="https://raw.githubusercontent.com/${UPSTREAM_REPOSITORY}/${REVISION}/dist/72-citron-input.rules"
+          curl --fail --location --retry 4 --silent --show-error \
+            "$icon_url" --output "$RUNNER_TEMP/citron.svg"
+          curl --fail --location --retry 4 --silent --show-error \
+            "$rules_url" --output "$RUNNER_TEMP/72-citron-input.rules"
+          icon_digest="sha256:$(sha256sum "$RUNNER_TEMP/citron.svg" | cut -d' ' -f1)"
+          rules_digest="sha256:$(sha256sum "$RUNNER_TEMP/72-citron-input.rules" | cut -d' ' -f1)"
+
+          jq -n \
+            --arg revision "$REVISION" \
+            --arg publishedAt "$PUBLISHED_AT" \
+            --arg officialRelease "$UPSTREAM_RELEASE_TAG" \
+            --arg releaseTag "$IMMUTABLE_TAG" \
+            --arg genericUrl "$(asset_url "$GENERIC_NAME")" \
+            --arg genericHash "$(sri_from_digest "$(asset_digest "$GENERIC_NAME")")" \
+            --arg v3Url "$(asset_url "$V3_NAME")" \
+            --arg v3Hash "$(sri_from_digest "$(asset_digest "$V3_NAME")")" \
+            --arg armUrl "$(asset_url "$ARM_NAME")" \
+            --arg armHash "$(sri_from_digest "$(asset_digest "$ARM_NAME")")" \
+            --arg iconUrl "$icon_url" \
+            --arg iconHash "$(sri_from_digest "$icon_digest")" \
+            --arg rulesUrl "$rules_url" \
+            --arg rulesHash "$(sri_from_digest "$rules_digest")" \
+            '{
+              revision: $revision,
+              publishedAt: $publishedAt,
+              officialRelease: $officialRelease,
+              releaseTag: $releaseTag,
+              sources: {
+                "x86_64-linux": { url: $genericUrl, hash: $genericHash },
+                "x86_64-linux-v3": { url: $v3Url, hash: $v3Hash },
+                "aarch64-linux": { url: $armUrl, hash: $armHash }
+              },
+              icon: { url: $iconUrl, hash: $iconHash },
+              inputRules: { url: $rulesUrl, hash: $rulesHash }
+            }' >nix/sources.json.new
+          mv nix/sources.json.new nix/sources.json
+          jq empty nix/sources.json
+
+      - name: Commit metadata update
+        shell: bash
+        env:
+          SHORT_REVISION: ${{ steps.release.outputs.short_revision }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- nix/sources.json; then
+            echo "Nix metadata is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/sources.json
+          git commit -m "chore: package official Citron ${SHORT_REVISION}"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying." >&2
+          done
+          exit 1
