@@ -1,28 +1,28 @@
 {
-  "revision": "5269c2597141c1c5297715807542247cfad66783",
-  "publishedAt": "2026-09-20T23:15:34Z",
+  "revision": "ddfd42a1cb15da8283e21516a4fec8c848ce5e2c",
+  "publishedAt": "2026-09-22T03:01:44Z",
   "officialRelease": "nightly-linux",
-  "releaseTag": "linux-5269c2597",
+  "releaseTag": "linux-ddfd42a1c",
   "sources": {
     "x86_64-linux": {
-      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-5269c2597/citron_nightly-5269c2597-linux-x86_64-use-nopgo.AppImage",
-      "hash": "sha256-wioXWEkITgoXruTrXM2sww9ySWnSwy7BTyXBc0IohZ0="
+      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-ddfd42a1c/citron_nightly-ddfd42a1c-linux-x86_64-use-nopgo.AppImage",
+      "hash": "sha256-Yd2ZK4R2x/q3+lcSLWYIJIQZB4+/XGF22u5yKceDeZY="
     },
     "x86_64-linux-v3": {
-      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-5269c2597/citron_nightly-5269c2597-linux-x86_64_v3.AppImage",
-      "hash": "sha256-SLgMLBr9yXRN2kFBh+QeU0DNQquuTy5/wH6lNZF2VpY="
+      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-ddfd42a1c/citron_nightly-ddfd42a1c-linux-x86_64_v3.AppImage",
+      "hash": "sha256-XvGX02D8qMGwOu14otRFZbDEyfS6QoDy8XQtpxFoZeg="
     },
     "aarch64-linux": {
-      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-5269c2597/citron_nightly-5269c2597-linux-aarch64-use-nopgo.AppImage",
-      "hash": "sha256-QfwnFrmtIQTLTiTDvewfyxi34nMqR5lzonu/YNxo04k="
+      "url": "https://github.com/loonbac/citron-nextendo-nix/releases/download/linux-ddfd42a1c/citron_nightly-ddfd42a1c-linux-aarch64-use-nopgo.AppImage",
+      "hash": "sha256-rB/UjN951wy7UsOjLmQNn2lP+2ZbpaH7fmQAh4XIS8k="
     }
   },
   "icon": {
-    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/5269c2597141c1c5297715807542247cfad66783/dist/citron.svg",
+    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/ddfd42a1cb15da8283e21516a4fec8c848ce5e2c/dist/citron.svg",
     "hash": "sha256-gv8kEMTAYbeN5Em2nJBR37Dd+ZW3H+Q8v7bD/7nE+mc="
   },
   "inputRules": {
-    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/5269c2597141c1c5297715807542247cfad66783/dist/72-citron-input.rules",
+    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/ddfd42a1cb15da8283e21516a4fec8c848ce5e2c/dist/72-citron-input.rules",
     "hash": "sha256-JXygDyVHZ74HVt8uLJju/RZkNvXkLwCPihJg+QDl4VI="
   }
 }
