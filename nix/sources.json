@@ -18,11 +18,11 @@
     }
   },
   "icon": {
-    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/d3df71e55d423a7edf56559eae8fedf183e6ec6a/dist/citron.svg",
+    "url": "https://git.nextendo.network/NextendoNetwork/citron-nextendo/raw/commit/d3df71e55d423a7edf56559eae8fedf183e6ec6a/dist/citron.svg",
     "hash": "sha256-gv8kEMTAYbeN5Em2nJBR37Dd+ZW3H+Q8v7bD/7nE+mc="
   },
   "inputRules": {
-    "url": "https://raw.githubusercontent.com/NextendoNetwork/citron-nextendo/d3df71e55d423a7edf56559eae8fedf183e6ec6a/dist/72-citron-input.rules",
+    "url": "https://git.nextendo.network/NextendoNetwork/citron-nextendo/raw/commit/d3df71e55d423a7edf56559eae8fedf183e6ec6a/dist/72-citron-input.rules",
     "hash": "sha256-JXygDyVHZ74HVt8uLJju/RZkNvXkLwCPihJg+QDl4VI="
   }
 }
