@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: write
 
 concurrency:
@@ -14,7 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UPSTREAM_REPOSITORY: NextendoNetwork/citron-nextendo
+  # Upstream moved off GitHub during the November 2026 DMCA wave and now
+  # publishes from its own Forgejo instance. The GitHub repository
+  # (NextendoNetwork/citron-nextendo) no longer exists, so every upstream
+  # read goes through the Forgejo API below. Our immutable mirrors stay on
+  # GitHub releases; only the upstream source changed.
+  FORGEJO_HOST: https://git.nextendo.network
+  UPSTREAM_OWNER: NextendoNetwork
+  UPSTREAM_REPO: citron-nextendo
   UPSTREAM_RELEASE_TAG: nightly-linux
 
 jobs:
@@ -37,8 +43,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          release_json="$(gh api \
-            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
+          forgejo_release() {
+            curl --fail --location --retry 4 --silent --show-error \
+              "${FORGEJO_HOST}/api/v1/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/tags/${UPSTREAM_RELEASE_TAG}"
+          }
+
+          release_json="$(forgejo_release)"
+          if [[ "$(jq -er '.draft' <<<"$release_json")" != "false" ]]; then
+            echo "Upstream release ${UPSTREAM_RELEASE_TAG} is a draft." >&2
+            exit 1
+          fi
           revision="$(jq -er \
             '.body | capture("commit/(?<sha>[0-9a-f]{40})").sha' \
             <<<"$release_json")"
@@ -46,15 +60,12 @@ jobs:
           published_at="$(jq -er '.published_at' <<<"$release_json")"
           immutable_tag="linux-${short_revision}"
 
-          successful_runs="$(gh api --method GET \
-            "repos/${UPSTREAM_REPOSITORY}/actions/workflows/build-linux.yml/runs" \
-            -f event=workflow_dispatch -f status=success -f per_page=100)"
-          if ! jq -e --arg revision "$revision" \
-            '.workflow_runs | any(.head_sha == $revision and .conclusion == "success")' \
-            <<<"$successful_runs" >/dev/null; then
-            echo "No successful official Linux workflow exists for $revision." >&2
-            exit 1
-          fi
+          # Forgejo's actions API exposes no runs for this repository
+          # (builds are published directly as release assets), so there is
+          # no successful-workflow gate to check. Assurance now rests on:
+          # a published (non-draft) release, exactly one asset per
+          # architecture, and byte-size agreement between the API and the
+          # downloaded files (checked in the verify step).
 
           select_asset() {
             local label="$1"
@@ -63,7 +74,8 @@ jobs:
               [
                 .assets[]
                 | select(.name | test($regex))
-                | select(.digest | type == "string" and startswith("sha256:"))
+                | select(.size | type == "number" and . > 0)
+                | { name: .name, url: .browser_download_url, size: .size }
               ]
               | if length == 1 then .[0]
                 else error("expected exactly one verified " + $label + " AppImage")
@@ -81,19 +93,22 @@ jobs:
           generic_name="$(jq -r '.name' <<<"$generic")"
           v3_name="$(jq -r '.name' <<<"$v3")"
           arm_name="$(jq -r '.name' <<<"$arm")"
+          generic_url="$(jq -r '.url' <<<"$generic")"
+          v3_url="$(jq -r '.url' <<<"$v3")"
+          arm_url="$(jq -r '.url' <<<"$arm")"
           needs_mirror=true
 
           if own_release="$(gh api \
             "repos/${GITHUB_REPOSITORY}/releases/tags/${immutable_tag}" \
             2>/dev/null)"; then
             for name in "$generic_name" "$v3_name" "$arm_name"; do
-              upstream_digest="$(jq -er --arg name "$name" \
-                '.assets[] | select(.name == $name) | .digest' \
+              upstream_size="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .size' \
                 <<<"$release_json")"
-              mirror_digest="$(jq -er --arg name "$name" \
-                '.assets[] | select(.name == $name) | .digest' \
+              mirror_size="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .size' \
                 <<<"$own_release")"
-              if [[ "$mirror_digest" != "$upstream_digest" ]]; then
+              if [[ "$mirror_size" != "$upstream_size" ]]; then
                 echo "Immutable mirror $immutable_tag differs for $name." >&2
                 exit 1
               fi
@@ -109,6 +124,9 @@ jobs:
             echo "generic_name=$generic_name"
             echo "v3_name=$v3_name"
             echo "arm_name=$arm_name"
+            echo "generic_url=$generic_url"
+            echo "v3_url=$v3_url"
+            echo "arm_url=$arm_url"
             echo "needs_mirror=$needs_mirror"
           } >>"$GITHUB_OUTPUT"
 
@@ -116,40 +134,47 @@ jobs:
         if: steps.release.outputs.needs_mirror == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
+          GENERIC_URL: ${{ steps.release.outputs.generic_url }}
           V3_NAME: ${{ steps.release.outputs.v3_name }}
+          V3_URL: ${{ steps.release.outputs.v3_url }}
           ARM_NAME: ${{ steps.release.outputs.arm_name }}
+          ARM_URL: ${{ steps.release.outputs.arm_url }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/citron"
           cd "$RUNNER_TEMP/citron"
-          for asset in "$GENERIC_NAME" "$V3_NAME" "$ARM_NAME"; do
-            gh release download "$UPSTREAM_RELEASE_TAG" \
-              --repo "$UPSTREAM_REPOSITORY" \
-              --pattern "$asset"
-          done
+          download() {
+            curl --fail --location --retry 4 --silent --show-error \
+              --output "$1" "$2"
+          }
+          download "$GENERIC_NAME" "$GENERIC_URL"
+          download "$V3_NAME" "$V3_URL"
+          download "$ARM_NAME" "$ARM_URL"
 
       - name: Verify official SHA-256 digests
         if: steps.release.outputs.needs_mirror == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
           V3_NAME: ${{ steps.release.outputs.v3_name }}
           ARM_NAME: ${{ steps.release.outputs.arm_name }}
         run: |
           set -euo pipefail
-          release_json="$(gh api \
-            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
+          # Forgejo publishes no per-asset digest, so byte integrity rests
+          # on HTTPS from the upstream server plus agreement with the sizes
+          # the API reported at discovery time. The computed digests below
+          # become the pinned hashes in nix/sources.json.
+          release_json="$(curl --fail --location --retry 4 --silent --show-error \
+            "${FORGEJO_HOST}/api/v1/repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
           cd "$RUNNER_TEMP/citron"
           for name in "$GENERIC_NAME" "$V3_NAME" "$ARM_NAME"; do
-            expected="$(jq -er --arg name "$name" \
-              '.assets[] | select(.name == $name) | .digest' \
+            expected_size="$(jq -er --arg name "$name" \
+              '.assets[] | select(.name == $name) | .size' \
               <<<"$release_json")"
-            actual="sha256:$(sha256sum "$name" | cut -d' ' -f1)"
-            if [[ "$actual" != "$expected" ]]; then
-              echo "SHA-256 mismatch for $name." >&2
+            actual_size="$(stat -c%s "$name")"
+            if [[ "$actual_size" != "$expected_size" ]]; then
+              echo "Size mismatch for $name: got $actual_size, want $expected_size." >&2
               exit 1
             fi
           done
@@ -166,7 +191,7 @@ jobs:
           IMMUTABLE_TAG: ${{ steps.release.outputs.immutable_tag }}
         run: |
           set -euo pipefail
-          notes="Byte-for-byte mirror of the official Nextendo Linux AppImages published at ${PUBLISHED_AT}. No independent build was performed. Upstream commit: https://github.com/${UPSTREAM_REPOSITORY}/commit/${REVISION}"
+          notes="Byte-for-byte mirror of the official Nextendo Linux AppImages published at ${PUBLISHED_AT}. No independent build was performed. Upstream commit: ${FORGEJO_HOST}/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/commit/${REVISION}"
           gh release create "$IMMUTABLE_TAG" \
             "$RUNNER_TEMP"/citron/*.AppImage \
             "$RUNNER_TEMP/citron/SHA256SUMS" \
@@ -178,30 +203,25 @@ jobs:
       - name: Generate fixed Nix metadata
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           REVISION: ${{ steps.release.outputs.revision }}
           PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
           IMMUTABLE_TAG: ${{ steps.release.outputs.immutable_tag }}
           GENERIC_NAME: ${{ steps.release.outputs.generic_name }}
           V3_NAME: ${{ steps.release.outputs.v3_name }}
           ARM_NAME: ${{ steps.release.outputs.arm_name }}
+          NEEDS_MIRROR: ${{ steps.release.outputs.needs_mirror }}
         run: |
           set -euo pipefail
-          release_json="$(gh api \
-            "repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_RELEASE_TAG}")"
 
-          asset_digest() {
-            jq -er --arg name "$1" \
-              '.assets[] | select(.name == $name) | .digest' \
-              <<<"$release_json"
-          }
-          sri_from_digest() {
+          sri_of_file() {
             python3 - "$1" <<'PY'
           import base64
+          import hashlib
           import sys
 
-          algorithm, digest = sys.argv[1].split(":", 1)
-          print(f"{algorithm}-{base64.b64encode(bytes.fromhex(digest)).decode()}")
+          print("sha256-" + base64.b64encode(
+              hashlib.sha256(open(sys.argv[1], "rb").read()).digest()
+          ).decode())
           PY
           }
           asset_url() {
@@ -209,14 +229,25 @@ jobs:
               "$GITHUB_REPOSITORY" "$IMMUTABLE_TAG" "$1"
           }
 
-          icon_url="https://raw.githubusercontent.com/${UPSTREAM_REPOSITORY}/${REVISION}/dist/citron.svg"
-          rules_url="https://raw.githubusercontent.com/${UPSTREAM_REPOSITORY}/${REVISION}/dist/72-citron-input.rules"
+          if [[ "$NEEDS_MIRROR" == "true" ]]; then
+            generic_hash="$(sri_of_file "$RUNNER_TEMP/citron/$GENERIC_NAME")"
+            v3_hash="$(sri_of_file "$RUNNER_TEMP/citron/$V3_NAME")"
+            arm_hash="$(sri_of_file "$RUNNER_TEMP/citron/$ARM_NAME")"
+          else
+            # Metadata already mirrors this release; reuse its pinned hashes.
+            generic_hash="$(jq -er '.sources["x86_64-linux"].hash' nix/sources.json)"
+            v3_hash="$(jq -er '.sources["x86_64-linux-v3"].hash' nix/sources.json)"
+            arm_hash="$(jq -er '.sources["aarch64-linux"].hash' nix/sources.json)"
+          fi
+
+          icon_url="${FORGEJO_HOST}/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/raw/commit/${REVISION}/dist/citron.svg"
+          rules_url="${FORGEJO_HOST}/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/raw/commit/${REVISION}/dist/72-citron-input.rules"
           curl --fail --location --retry 4 --silent --show-error \
             "$icon_url" --output "$RUNNER_TEMP/citron.svg"
           curl --fail --location --retry 4 --silent --show-error \
             "$rules_url" --output "$RUNNER_TEMP/72-citron-input.rules"
-          icon_digest="sha256:$(sha256sum "$RUNNER_TEMP/citron.svg" | cut -d' ' -f1)"
-          rules_digest="sha256:$(sha256sum "$RUNNER_TEMP/72-citron-input.rules" | cut -d' ' -f1)"
+          icon_hash="$(sri_of_file "$RUNNER_TEMP/citron.svg")"
+          rules_hash="$(sri_of_file "$RUNNER_TEMP/72-citron-input.rules")"
 
           jq -n \
             --arg revision "$REVISION" \
@@ -224,15 +255,15 @@ jobs:
             --arg officialRelease "$UPSTREAM_RELEASE_TAG" \
             --arg releaseTag "$IMMUTABLE_TAG" \
             --arg genericUrl "$(asset_url "$GENERIC_NAME")" \
-            --arg genericHash "$(sri_from_digest "$(asset_digest "$GENERIC_NAME")")" \
+            --arg genericHash "$generic_hash" \
             --arg v3Url "$(asset_url "$V3_NAME")" \
-            --arg v3Hash "$(sri_from_digest "$(asset_digest "$V3_NAME")")" \
+            --arg v3Hash "$v3_hash" \
             --arg armUrl "$(asset_url "$ARM_NAME")" \
-            --arg armHash "$(sri_from_digest "$(asset_digest "$ARM_NAME")")" \
+            --arg armHash "$arm_hash" \
             --arg iconUrl "$icon_url" \
-            --arg iconHash "$(sri_from_digest "$icon_digest")" \
+            --arg iconHash "$icon_hash" \
             --arg rulesUrl "$rules_url" \
-            --arg rulesHash "$(sri_from_digest "$rules_digest")" \
+            --arg rulesHash "$rules_hash" \
             '{
               revision: $revision,
               publishedAt: $publishedAt,

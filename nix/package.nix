@@ -80,7 +80,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     description = "Citron Neo fork with Nextendo Network online play";
-    homepage = "https://github.com/NextendoNetwork/citron-nextendo";
+    homepage = "https://git.nextendo.network/NextendoNetwork/citron-nextendo";
     downloadPage = "https://github.com/loonbac/citron-nextendo-nix/releases";
     license = lib.licenses.gpl3Plus;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

@@ -1,7 +1,7 @@
 # Citron Nextendo for Nix
 
 Small Nix flake for the official Linux builds of
-[`NextendoNetwork/citron-nextendo`](https://github.com/NextendoNetwork/citron-nextendo).
+[`NextendoNetwork/citron-nextendo`](https://git.nextendo.network/NextendoNetwork/citron-nextendo).
 It packages the upstream AppImages; it does not fork or compile the emulator.
 
 ## Install
@@ -65,10 +65,11 @@ FUSE for the AppImage runtime.
 
 ## Updates and provenance
 
-Nextendo publishes Linux AppImages under the mutable `nightly-linux` release.
-This repository waits for a successful official Linux workflow, verifies the
-SHA-256 digests supplied by GitHub, and copies those exact files into an
-immutable `linux-<commit>` release. `nix/sources.json` then records those fixed
+Nextendo publishes Linux AppImages under the mutable `nightly-linux` release
+on its own Forgejo instance (it left GitHub during the November 2026 DMCA
+wave).
+This repository verifies the published release, and copies those exact files
+into an immutable `linux-<commit>` release. `nix/sources.json` then records those fixed
 URLs and hashes.
 
 No source code is modified and no independent Citron build is produced. The
